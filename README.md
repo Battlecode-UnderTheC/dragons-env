@@ -28,6 +28,9 @@ This is the **environment only**: the rules, a driver for the official engine to
 check them against, and map generation. Observation encoding, action spaces,
 policies and training belong with the agent and are deliberately not here.
 
+**[game.md](game.md) describes the game itself** -- board, turn order,
+actions, deaths, pearls, sonar, portals, scoring and the map format.
+
 ## How the rules were obtained
 
 Not by guessing. `wasm-decompile --enable-all` lifts the engine to readable
