@@ -267,8 +267,10 @@ void Game::TakeTurn(int dragon_index, const Action& action) {
     case Action::Kind::None: Kill(dragon, Death::NoAction); break;
   }
   // Sonar is not an action: it goes out after the action, from wherever the
-  // dragon ended up, and only if it survived.
-  if (action.sonar && dragon.alive) CastSonar(dragon, action.payload);
+  // dragon ended up, and only if it survived. Split may have grown dragons_,
+  // which invalidates `dragon`, so the reference is taken afresh.
+  Dragon& after = dragons_[dragon_index];
+  if (action.sonar && after.alive) CastSonar(after, action.payload);
 }
 
 void Game::BeginRound() { PearlTick(); }
