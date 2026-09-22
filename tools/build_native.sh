@@ -11,6 +11,6 @@ case "$(uname)" in
 esac
 # shellcheck disable=SC2086
 c++ -std=c++20 -O3 -shared -fPIC $link $inc -I"$root/cpp" \
-    "$root/cpp/dragons/game.cpp" "$root/cpp/agent/encoder.cpp" \
-    "$root/cpp/agent/bindings.cpp" -o "$root/cpp/_dragons$ext"
+    "$root/cpp/dragons/game.cpp" "$root/cpp/bindings.cpp" \
+    -o "$root/cpp/_dragons$ext"
 echo "built $root/cpp/_dragons$ext"

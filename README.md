@@ -5,19 +5,28 @@ against the official engine.
 
 The official engine (`unswbc_engine.wasm`) is ground truth but costs ~19 µs per
 dragon-turn and calls back into Python for every single one. The native
-simulator here reimplements the same rules and runs a batched rollout at
-**~2.5 µs per dragon-turn on one core**, roughly 400k turns/s, with the
-observation encoding and legal-action masking included.
+simulator here reimplements the same rules and steps at roughly **1 µs per
+dragon-turn on one core**.
 
 ```python
-from dragons_env import NativeVecEnv, mapgen
-import numpy as np, random
+import _dragons                                  # built into cpp/
+from dragons_env import mapgen
+import random
 
-env = NativeVecEnv([mapgen.random_map(random.Random(s)) for s in range(128)])
-for batch in env.round_slots():                 # one block per dragon slot
-    actions = (np.random.random(batch.mask.shape) * batch.mask).argmax(1)
-    env.submit(actions)
+game = _dragons.Game.from_map_text(mapgen.random_map(random.Random(0)).to_text())
+while not game.finished() and game.round < 500:
+    game.begin_round()
+    for index in game.turn_order():              # dragons act in id order
+        dragon = game.dragons()[index]
+        if dragon["alive"]:
+            game.take_turn(index, _dragons.Action.move(dragon["facing"]))
+    game.end_round()
+print(game.result(), game.team_score(0), game.team_score(1))
 ```
+
+This is the **environment only**: the rules, a driver for the official engine to
+check them against, and map generation. Observation encoding, action spaces,
+policies and training belong with the agent and are deliberately not here.
 
 ## How the rules were obtained
 
@@ -74,22 +83,14 @@ and a split child built back to front.
 4. **Only two dragons.** Unit limits and crowded multi-dragon rounds are
    untested.
 
-`tests/test_cpp_obs.py` separately checks that the native observation encoder
-and the Python one produce identical tensors, which is what stops a policy
-trained through one from drifting when it is deployed through the other.
-
 ## Layout
 
 ```
-cpp/dragons/    the rules, and nothing else
-cpp/agent/      observation encoding, action space, batched stepping
-dragons_env/    python: wasm engine driver, protocol, map generation, wrapper
+cpp/dragons/    the rules
+cpp/bindings.cpp
+dragons_env/    python: wasm engine driver, wire protocol, map generation
 tests/          differential tests against the real engine
 ```
-
-`cpp/dragons/` is deliberately separate: it is pinned to the real engine by the
-tests, and no decision about how a policy looks at the board should ever
-require editing it.
 
 ## Build
 
