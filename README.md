@@ -16,10 +16,11 @@ import random
 game = _dragons.Game.from_map_text(mapgen.random_map(random.Random(0)).to_text())
 while not game.finished() and game.round < 500:
     game.begin_round()
-    for index in game.turn_order():              # dragons act in id order
+    index = game.next_turn()
+    while index is not None:                     # includes children born this round
         dragon = game.dragons()[index]
-        if dragon["alive"]:
-            game.take_turn(index, _dragons.Action.move(dragon["facing"]))
+        game.take_turn(index, _dragons.Action.move(dragon["facing"]))
+        index = game.next_turn(index)
     game.end_round()
 print(game.result(), game.team_score(0), game.team_score(1))
 ```
@@ -53,16 +54,16 @@ A few worth knowing:
 ## What is verified, and what is not
 
 `tests/test_cpp_sim.py` drives both engines through identical action sequences
-and compares complete state -- every pearl, every segment of every dragon,
-lengths, facings, sonar inboxes, death causes, winner -- before every turn. The
-boards are 7x7, the smallest the engine accepts, because there one dragon's
-window covers the whole map and full state is observable without decoding
-replays.
+and compares the complete visible state -- every visible pearl and dragon
+segment, lengths, facings, sonar inboxes, death causes, and winner -- before
+every turn. Boards use the documented minimum size of 10x10.
 
-**Verified**: 300 matches, 16,920 dragon-turns, zero divergence, across four
-pearl regimes. Movement, sprints and their per-step cost, splits, sonar,
-collisions, all five death causes, corpse pearls, pearl spawning, scoring and
-the 500-round horizon. 24 of these run in CI.
+**Verified in CI**: 32 differential matches across four pearl regimes, plus
+targeted regressions for split-and-sonar, same-tile horizontal and vertical
+portals, symmetric pearl countdowns, split-child turn order, and map bounds.
+Movement, sprints and their per-step cost, splits, sonar, collisions, all five
+death causes, corpse pearls, pearl spawning, scoring and the 500-round horizon
+are covered.
 
 This caught five real bugs during development: the result being decided per
 round rather than per turn, split children acting in the round they are born,
@@ -71,16 +72,11 @@ and a split child built back to front.
 
 **Not verified**, and worth closing before trusting this beyond its envelope:
 
-1. **Portals are not fuzzed.** The generated boards set `portal_pairs=0`.
-   Portal traversal, sprint-through-portal and sonar-through-portal have
-   hand-written tests only.
-2. **The engine's pearl RNG stream is not reproduced.** It seeds a
-   fixed-constant mt19937; this simulator uses its own. Comparison therefore
-   only runs with `min == max` gap ranges, where the draw is forced. The
-   mechanism matches; the stream does not.
-3. **Only 7x7 boards are compared at full state.** Larger boards are checked
-   only for observation and mask equality, not global state.
-4. **Only two dragons.** Unit limits and crowded multi-dragon rounds are
+1. **Portals are not fuzzed.** Portal traversal and overlapping portal-owner
+   cases have hand-written tests only.
+2. **Only visible state is compared.** The official protocol does not expose
+   global state outside a dragon's 7x7 window.
+3. **Only two dragons.** Unit limits and crowded multi-dragon rounds are
    untested.
 
 ## Layout

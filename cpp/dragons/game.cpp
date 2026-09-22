@@ -1,6 +1,7 @@
 #include "dragons/game.hpp"
 
 #include <algorithm>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 
@@ -232,20 +233,59 @@ void Game::CastSonar(Dragon& dragon, uint32_t message) {
 // PearlTick: count every tile down; at zero plant a pearl, but never on a tile
 // that already has one or that a living dragon is standing on.
 void Game::PearlTick() {
-  for (int y = 0; y < height_; ++y) {
-    for (int x = 0; x < width_; ++x) {
-      Point p{static_cast<int16_t>(x), static_cast<int16_t>(y)};
-      Tile& tile = TileAt(p);
-      if (!tile.spawns) continue;
-      const int32_t before = tile.countdown;
-      tile.countdown = before - 1;
-      if (before > 1) continue;
-      if (!tile.pearl && AliveDragonOccupying(p) == nullptr) {
-        tile.pearl = true;
-      }
-      std::uniform_int_distribution<int32_t> gap(tile.gap_min, tile.gap_max);
-      tile.countdown = gap(rng_);
+  for (size_t i = 0; i < tiles_.size(); ++i) {
+    const size_t mirror = static_cast<size_t>(pearl_mirror_[i]);
+    if (mirror < i) continue;  // the pair was processed at its lower index
+    Tile& tile = tiles_[i];
+    Tile& other = tiles_[mirror];
+    if (!tile.spawns) continue;
+
+    const int32_t before = tile.countdown;
+    tile.countdown = before - 1;
+    other.countdown = tile.countdown;
+    if (before > 1) continue;
+
+    const Point p{static_cast<int16_t>(i % width_),
+                  static_cast<int16_t>(i / width_)};
+    if (!tile.pearl && AliveDragonOccupying(p) == nullptr) tile.pearl = true;
+    if (mirror != i) {
+      const Point q{static_cast<int16_t>(mirror % width_),
+                    static_cast<int16_t>(mirror / width_)};
+      if (!other.pearl && AliveDragonOccupying(q) == nullptr) other.pearl = true;
     }
+
+    tile.countdown = DrawPearlGap(tile.gap_min, tile.gap_max);
+    other.countdown = tile.countdown;
+  }
+}
+
+// The official engine draws one raw mt19937 value and reduces it modulo the
+// inclusive range. Keep this explicit: std::uniform_int_distribution differs
+// across standard libraries and does not consume a value for a fixed range.
+int32_t Game::DrawPearlGap(int32_t minimum, int32_t maximum) {
+  const uint32_t range = static_cast<uint32_t>(maximum) -
+                         static_cast<uint32_t>(minimum) + 1u;
+  const uint32_t raw = rng_();
+  const uint32_t value = range == 0u ? raw : raw % range;
+  return static_cast<int32_t>(value + static_cast<uint32_t>(minimum));
+}
+
+void Game::InitialisePearlCountdowns() {
+  for (size_t i = 0; i < tiles_.size(); ++i) {
+    const size_t mirror = static_cast<size_t>(pearl_mirror_[i]);
+    if (mirror < i) continue;
+    Tile& tile = tiles_[i];
+    Tile& other = tiles_[mirror];
+    if (tile.spawns != other.spawns || tile.gap_min != other.gap_min ||
+        tile.gap_max != other.gap_max) {
+      throw std::runtime_error("symmetric tiles have different pearl gaps");
+    }
+    if (!tile.spawns) {
+      tile.countdown = other.countdown = -1;
+      continue;
+    }
+    tile.countdown = DrawPearlGap(tile.gap_min, tile.gap_max);
+    other.countdown = tile.countdown;
   }
 }
 
@@ -255,6 +295,13 @@ std::vector<int> Game::TurnOrder() const {
     if (dragons_[i].alive) order.push_back(static_cast<int>(i));
   }
   return order;
+}
+
+std::optional<int> Game::NextTurn(int after_index) const {
+  for (size_t i = static_cast<size_t>(after_index + 1); i < dragons_.size(); ++i) {
+    if (dragons_[i].alive) return static_cast<int>(i);
+  }
+  return std::nullopt;
 }
 
 void Game::TakeTurn(int dragon_index, const Action& action) {
@@ -267,8 +314,10 @@ void Game::TakeTurn(int dragon_index, const Action& action) {
     case Action::Kind::None: Kill(dragon, Death::NoAction); break;
   }
   // Sonar is not an action: it goes out after the action, from wherever the
-  // dragon ended up, and only if it survived.
-  if (action.sonar && dragon.alive) CastSonar(dragon, action.payload);
+  // dragon ended up, and only if it survived. Split may have grown dragons_,
+  // invalidating `dragon`, so take the reference afresh.
+  Dragon& after = dragons_[dragon_index];
+  if (action.sonar && after.alive) CastSonar(after, action.payload);
 }
 
 void Game::BeginRound() { PearlTick(); }
@@ -311,6 +360,7 @@ Game Game::FromMapText(const std::string& text, uint64_t seed) {
   std::istringstream stream(text);
   std::string line;
   std::vector<std::array<int, 3>> raw_edges;   // index, kind, portal id
+  std::string symmetry;
 
   while (std::getline(stream, line)) {
     std::istringstream fields(line);
@@ -318,9 +368,15 @@ Game Game::FromMapText(const std::string& text, uint64_t seed) {
     fields >> key;
     if (key == "MAP") {
       fields >> game.width_ >> game.height_;
+      if (game.width_ < kMinMapSize || game.width_ > kMaxMapSize ||
+          game.height_ < kMinMapSize || game.height_ > kMaxMapSize) {
+        throw std::runtime_error("map dimensions must be between 10 and 64");
+      }
       game.tiles_.assign(static_cast<size_t>(game.width_) * game.height_, Tile{});
       game.h_edges_.assign(game.tiles_.size(), Edge{});
       game.v_edges_.assign(game.tiles_.size(), Edge{});
+    } else if (key == "SYMMETRY") {
+      fields >> symmetry;
     } else if (key == "UNIT_LIMIT") {
       fields >> game.unit_limit_;
     } else if (key == "TILE") {
@@ -330,10 +386,6 @@ Game Game::FromMapText(const std::string& text, uint64_t seed) {
       tile.gap_min = lo;
       tile.gap_max = hi;
       tile.spawns = hi > 0;
-      if (tile.spawns) {
-        std::uniform_int_distribution<int32_t> gap(lo, hi);
-        tile.countdown = gap(game.rng_);
-      }
     } else if (key == "EDGE") {
       int index, kind, portal;
       fields >> index >> kind >> portal;
@@ -364,11 +416,29 @@ Game Game::FromMapText(const std::string& text, uint64_t seed) {
   if (game.width_ == 0) throw std::runtime_error("map has no MAP line");
   game.occupant_.assign(game.tiles_.size(), -1);
   game.tile_facing_.assign(game.tiles_.size(), Dir::N);
+  game.pearl_mirror_.resize(game.tiles_.size());
+  for (int y = 0; y < game.height_; ++y) {
+    for (int x = 0; x < game.width_; ++x) {
+      int mx = x, my = y;
+      // The map names the mirror axis: y reflects x, x reflects y.
+      if (symmetry == "y" || symmetry == "xy") mx = game.width_ - 1 - x;
+      if (symmetry == "x" || symmetry == "xy") my = game.height_ - 1 - y;
+      const size_t i = static_cast<size_t>(y) * game.width_ + x;
+      game.pearl_mirror_[i] = my * game.width_ + mx;
+    }
+  }
+  game.InitialisePearlCountdowns();
 
   // Edge indices: y * 2 * (w + 1) + x is the north edge of (x, y); the same
   // plus (w + 1) is its west edge. Row h and column w mirror row/column 0.
   const int stride = 2 * (game.width_ + 1);
-  std::vector<std::pair<int, Point>> portal_slots;   // portal id -> owning tile
+  struct PortalSlot {
+    int id;
+    Point owner;
+    bool vertical;
+    Edge* edge;
+  };
+  std::vector<PortalSlot> portal_slots;
   for (const auto& entry : raw_edges) {
     const int index = entry[0];
     const int y = index / stride;
@@ -382,26 +452,23 @@ Game Game::FromMapText(const std::string& text, uint64_t seed) {
       edge.kind = EdgeKind::Kelp;
     } else if (entry[1] == 2) {
       edge.kind = EdgeKind::Portal;
-      portal_slots.emplace_back(entry[2], owner);
-      // orientation recorded so the partner lookup below knows which side
-      edge.partner_vertical = vertical;
+      portal_slots.push_back(PortalSlot{entry[2], owner, vertical, &edge});
     }
   }
-  for (size_t i = 0; i < portal_slots.size(); ++i) {
-    for (size_t j = i + 1; j < portal_slots.size(); ++j) {
-      if (portal_slots[i].first != portal_slots[j].first) continue;
-      const Point a = portal_slots[i].second;
-      const Point b = portal_slots[j].second;
-      Edge& ea = game.v_edges_[game.Index(a)].kind == EdgeKind::Portal
-                     ? game.v_edges_[game.Index(a)] : game.h_edges_[game.Index(a)];
-      Edge& eb = game.v_edges_[game.Index(b)].kind == EdgeKind::Portal
-                     ? game.v_edges_[game.Index(b)] : game.h_edges_[game.Index(b)];
-      ea.partner = b;
-      eb.partner = a;
-      const bool a_vertical = game.v_edges_[game.Index(a)].kind == EdgeKind::Portal;
-      ea.partner_vertical = a_vertical;
-      eb.partner_vertical = a_vertical;
+  std::map<int, std::vector<PortalSlot*>> portals_by_id;
+  for (PortalSlot& slot : portal_slots) portals_by_id[slot.id].push_back(&slot);
+  for (auto& [id, pair] : portals_by_id) {
+    if (pair.size() != 2) {
+      throw std::runtime_error("portal id " + std::to_string(id) +
+                               " must occur exactly twice");
     }
+    if (pair[0]->vertical != pair[1]->vertical) {
+      throw std::runtime_error("paired portals must have the same orientation");
+    }
+    pair[0]->edge->partner = pair[1]->owner;
+    pair[1]->edge->partner = pair[0]->owner;
+    pair[0]->edge->partner_vertical = pair[1]->vertical;
+    pair[1]->edge->partner_vertical = pair[0]->vertical;
   }
   for (const Dragon& dragon : game.dragons_) game.RefreshFacings(dragon);
   return game;

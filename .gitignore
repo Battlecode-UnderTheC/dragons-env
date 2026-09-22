@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
 *.so
+*.pyd
+*.lib
+*.exp
 .venv/
 build/

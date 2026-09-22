@@ -1,15 +1,13 @@
 """Differential test: the native sim must match the real engine move for move.
 
-The engine only ever shows a dragon a 7x7 window, so the boards here are 7x7 --
-the smallest it accepts -- where that window is the entire map. One dragon's
-observation is then the full state, which makes an exact comparison possible
-without decoding replays or guessing.
+The engine only ever shows a dragon a 7x7 window. Tests use the documented
+minimum 10x10 board and compare the native state inside the acting dragon's
+window with the official engine's observation.
 
-The engine seeds its own RNG from a constant we do not reproduce, so pearl
-spawning is tested with gap ranges where min == max: the draw is then forced and
-the whole thing is deterministic. Everything is compared round by round --
-movement, sprints and their incremental cost, collisions, splits, sonar, corpse
-pearls, eating, spawning and scoring.
+The native simulator uses the official engine's mt19937 seed and modulo-based
+range reduction, so both fixed and variable pearl gaps are compared. Everything
+is checked round by round: movement, sprints and their incremental cost,
+collisions, splits, sonar, corpse pearls, eating, spawning and scoring.
 """
 from __future__ import annotations
 
@@ -26,7 +24,7 @@ except ImportError:                      # pragma: no cover
     _dragons = None
 
 from dragons_env import WasmEngine
-from dragons_env.mapgen import MapSpec, edge_between, snake
+from dragons_env.mapgen import MapSpec, edge_between, rotate_edge, snake
 from dragons_env.protocol import parse_turn
 
 pytestmark = pytest.mark.skipif(_dragons is None,
@@ -53,19 +51,21 @@ def scripted_action(seed, round_num, dragon_id, facing, length):
     return ("move", "".join(dirs), sonar, rng.randrange(2 ** 32) if sonar else 0)
 
 
-def random_seven(rng, pearl_gap=(0, 0)) -> MapSpec:
-    """A 7x7 board. `pearl_gap` with min == max keeps spawning deterministic, so
-    pearls can be compared without reproducing the engine's own RNG seed."""
-    w = h = 7
+def random_board(rng, pearl_gap=(0, 0)) -> MapSpec:
+    """A documented-minimum 10x10 symmetric board."""
+    w = h = 10
     kelp = set()
     for y in range(h):
         for x in range(w):
             for direction in ("N", "W"):
                 if rng.random() < 0.05:
-                    kelp.add(edge_between(x, y, direction, w, h))
-    spec = MapSpec(w, h, [(0, snake(1, 1, 3, "E", w, h)),
-                          (1, snake(5, 5, 3, "W", w, h))],
-                   kelp=sorted(kelp), pearl_gap=pearl_gap)
+                    edge = edge_between(x, y, direction, w, h)
+                    kelp.add(edge)
+                    kelp.add(rotate_edge(edge, w, h))
+    first = snake(2, 2, 3, "E", w, h)
+    second = [(w - 1 - x, h - 1 - y) for x, y in first]
+    spec = MapSpec(w, h, [(0, first), (1, second)], kelp=sorted(kelp),
+                   pearl_gap=pearl_gap, symmetry="xy")
     spawn = {p for _, segs in spec.dragons for p in segs}
     spec.kelp = [e for e in spec.kelp
                  if all(e != edge_between(x, y, d, w, h)
@@ -112,13 +112,18 @@ def native_states(spec: MapSpec, seed: int):
             if not dragon["alive"]:
                 index += 1
                 continue
-            pearls = tuple(sorted(tuple(p) for p in game.pearls()))
+            hx, hy = dragon["segments"][0]
+            visible = {((hx + dx) % game.width, (hy + dy) % game.height)
+                       for dy in range(-3, 4) for dx in range(-3, 4)}
+            pearls = tuple(sorted(tuple(p) for p in game.pearls()
+                                  if tuple(p) in visible))
             parts = []
             for other in game.dragons():
                 if not other["alive"]:
                     continue
                 for i, (x, y) in enumerate(other["segments"]):
-                    parts.append((other["id"], x, y, i == 0))
+                    if (x, y) in visible:
+                        parts.append((other["id"], x, y, i == 0))
             seen.append((game.round, dragon["id"], dragon["length"],
                          dragon["facing"], tuple(dragon["inbox"]),
                          pearls, tuple(sorted(parts))))
@@ -134,11 +139,11 @@ def native_states(spec: MapSpec, seed: int):
     return seen, game.deaths(), game.result()
 
 
-@pytest.mark.parametrize("gap", [(0, 0), (1, 1), (4, 4)])
+@pytest.mark.parametrize("gap", [(0, 0), (1, 1), (4, 4), (1, 5)])
 @pytest.mark.parametrize("seed", list(range(8)))
 def test_native_sim_matches_the_engine(seed, gap):
     rng = random.Random(seed)
-    spec = random_seven(rng, pearl_gap=gap)
+    spec = random_board(rng, pearl_gap=gap)
     engine_seen, engine_deaths, engine_winner = engine_states(spec, seed)
     native_seen, native_deaths, native_winner = native_states(spec, seed)
 

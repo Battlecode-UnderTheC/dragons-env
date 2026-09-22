@@ -53,11 +53,12 @@ PYBIND11_MODULE(_dragons, m) {
 
   py::class_<Game>(m, "Game")
       .def_static("from_map_text", &Game::FromMapText,
-                  py::arg("text"), py::arg("seed") = 0)
+                  py::arg("text"), py::arg("seed") = Game::kOfficialPearlSeed)
       .def_property_readonly("width", &Game::width)
       .def_property_readonly("height", &Game::height)
       .def_property_readonly("round", &Game::round)
       .def("turn_order", &Game::TurnOrder)
+      .def("next_turn", &Game::NextTurn, py::arg("after_index") = -1)
       .def("begin_round", &Game::BeginRound)
       .def("take_turn", &Game::TakeTurn)
       .def("end_round", &Game::EndRound)
@@ -88,6 +89,11 @@ PYBIND11_MODULE(_dragons, m) {
             }
           }
         }
+        return out;
+      })
+      .def("pearl_countdowns", [](const Game& game) {
+        py::list out;
+        for (const Tile& tile : game.tiles()) out.append(tile.countdown);
         return out;
       })
       .def("deaths", [](const Game& game) {

@@ -93,9 +93,13 @@ class Game {
   static constexpr int kMaxRounds = 500;
   static constexpr int kMinSize = 2;         // a dragon may not shrink below this
   static constexpr int kVisionRadius = 3;
+  static constexpr int kMinMapSize = 10;
+  static constexpr int kMaxMapSize = 64;
+  static constexpr uint32_t kOfficialPearlSeed = 1592614637u;
 
   // Parses the toolkit's .map format, the same text the real engine reads.
-  static Game FromMapText(const std::string& text, uint64_t seed = 0);
+  static Game FromMapText(const std::string& text,
+                          uint64_t seed = kOfficialPearlSeed);
 
   int width() const { return width_; }
   int height() const { return height_; }
@@ -108,9 +112,12 @@ class Game {
   const Tile& TileAt(Point p) const { return tiles_[Index(p)]; }
   Tile& TileAt(Point p) { return tiles_[Index(p)]; }
 
-  // Dragons act in id order within a round, each seeing what the earlier ones
-  // left behind. `actions` is indexed the same way as `TurnOrder()`.
+  // Snapshot of the dragons currently eligible to act. A split child is
+  // appended after this snapshot, so round drivers must iterate dragons()
+  // dynamically (see README) rather than retaining this result for the whole
+  // round.
   std::vector<int> TurnOrder() const;
+  std::optional<int> NextTurn(int after_index) const;
   // A round is: BeginRound (pearls count down and may spawn), then every
   // dragon that is alive when its turn comes, then EndRound. The engine ticks
   // pearls *before* the turns -- a tile with gap (5,5) already reads 4 on the
@@ -146,6 +153,8 @@ class Game {
   void Occupy(Point p, int32_t dragon_index, Dir facing);
   void Vacate(Point p);
   void RefreshFacings(const Dragon& dragon);
+  void InitialisePearlCountdowns();
+  int32_t DrawPearlGap(int32_t minimum, int32_t maximum);
   int32_t IndexOfDragon(const Dragon& dragon) const;
   Point Wrap(int x, int y) const;
   const Edge& EdgeOnTileSide(Point p, Dir dir) const;
@@ -155,6 +164,9 @@ class Game {
   int unit_limit_ = 64;
   int32_t next_id_ = 0;
   std::vector<Tile> tiles_;
+  // Index of the tile sharing each tile's pearl countdown. Self when the map
+  // has no symmetry or the tile lies on the symmetry axis.
+  std::vector<int32_t> pearl_mirror_;
   std::vector<Edge> h_edges_;   // north edge of (x, y)
   std::vector<Edge> v_edges_;   // west edge of (x, y)
   std::vector<Dragon> dragons_;

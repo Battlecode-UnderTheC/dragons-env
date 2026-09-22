@@ -17,7 +17,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
-MIN_DIM = 7          # the engine refuses anything smaller
+MIN_DIM = 10
+MAX_DIM = 64
 DEFAULT_UNIT_LIMIT = 64
 
 OFFSET = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}
@@ -43,6 +44,21 @@ def edge_between(x: int, y: int, direction: str, w: int, h: int) -> int:
     return west((x + 1) % w, y, w)
 
 
+def rotate_point(x: int, y: int, w: int, h: int) -> tuple[int, int]:
+    """The point paired with ``(x, y)`` by 180-degree map symmetry."""
+    return w - 1 - x, h - 1 - y
+
+
+def rotate_edge(index: int, w: int, h: int) -> int:
+    """The edge paired with ``index`` by 180-degree map symmetry."""
+    stride = 2 * (w + 1)
+    y, offset = divmod(index, stride)
+    if offset < w + 1:  # north edge of (x, y)
+        return north(w - 1 - offset, (-y) % h, w)
+    x = offset - (w + 1)  # west edge of (x, y)
+    return west((-x) % w, h - 1 - y, w)
+
+
 @dataclass
 class MapSpec:
     width: int
@@ -54,10 +70,17 @@ class MapSpec:
     tile_gaps: dict[tuple[int, int], tuple[int, int]] | None = None
     name: str = "Generated"
     unit_limit: int | None = None
+    symmetry: str | None = None
 
     def to_text(self) -> str:
         w, h = self.width, self.height
+        if not (MIN_DIM <= w <= MAX_DIM and MIN_DIM <= h <= MAX_DIM):
+            raise ValueError(f"map dimensions must be between {MIN_DIM} and {MAX_DIM}")
+        if self.symmetry not in (None, "x", "y", "xy"):
+            raise ValueError("symmetry must be one of: x, y, xy, or None")
         out = [f"MAP {w} {h}", f"MAP_NAME {self.name}"]
+        if self.symmetry:
+            out.insert(1, f"SYMMETRY {self.symmetry}")
         if self.unit_limit is not None:
             out.append(f"UNIT_LIMIT {self.unit_limit}")
         tiles = []
@@ -91,10 +114,10 @@ def open_board(width: int = 15, height: int = 15, length: int = 3,
                pearl_gap: tuple[int, int] = (8, 20), name: str = "Open") -> MapSpec:
     """Two dragons facing each other on an empty torus."""
     y = height // 2
-    return MapSpec(width, height, name=name, pearl_gap=pearl_gap, dragons=[
-        (0, snake(width // 4, y, length, "E", width, height)),
-        (1, snake(3 * width // 4, y, length, "W", width, height)),
-    ])
+    first = snake(width // 4, y, length, "E", width, height)
+    second = [rotate_point(x, y, width, height) for x, y in first]
+    return MapSpec(width, height, name=name, pearl_gap=pearl_gap,
+                   dragons=[(0, first), (1, second)], symmetry="xy")
 
 
 def random_map(rng: random.Random, *, min_size: int = 11, max_size: int = 24,
@@ -103,6 +126,8 @@ def random_map(rng: random.Random, *, min_size: int = 11, max_size: int = 24,
                pearl_gap_choices: tuple[tuple[int, int], ...] = ((4, 12), (8, 20), (15, 40)),
                ) -> MapSpec:
     """A randomised board. Spawns are placed symmetrically and kept apart."""
+    if max_size > MAX_DIM or min_size > max_size:
+        raise ValueError(f"map dimensions must be between {MIN_DIM} and {MAX_DIM}")
     w = rng.randrange(max(min_size, MIN_DIM), max_size + 1)
     h = rng.randrange(max(min_size, MIN_DIM), max_size + 1)
 
@@ -114,7 +139,7 @@ def random_map(rng: random.Random, *, min_size: int = 11, max_size: int = 24,
             y = rng.randrange(h)
             facing = rng.choice("NESW")
             a = snake(x, y, length, facing, w, h)
-            b = snake((x + w // 2) % w, (y + h // 2) % h, length, OPPOSITE[facing], w, h)
+            b = [rotate_point(px, py, w, h) for px, py in a]
             if occupied.isdisjoint(a) and occupied.isdisjoint(b) and set(a).isdisjoint(b):
                 occupied.update(a)
                 occupied.update(b)
@@ -133,26 +158,28 @@ def random_map(rng: random.Random, *, min_size: int = 11, max_size: int = 24,
                 continue
             for direction in ("N", "W"):
                 if rng.random() < kelp_density:
-                    kelp.add(edge_between(x, y, direction, w, h))
+                    edge = edge_between(x, y, direction, w, h)
+                    kelp.add(edge)
+                    kelp.add(rotate_edge(edge, w, h))
 
     portals: list[tuple[int, int]] = []
     used: set[int] = set()          # an edge may belong to at most one portal
     for pid in range(portal_pairs):
         horizontal = rng.random() < 0.5
-        picked: list[int] = []
         for _ in range(500):
             x, y = rng.randrange(w), rng.randrange(h)
             idx = north(x, y, w) if horizontal else west(x, y, w)
+            partner = rotate_edge(idx, w, h)
             # row h and column w mirror 0, so keep off them to avoid aliasing
-            if idx in kelp or idx in used or idx in picked:
+            if idx == partner or idx in kelp or partner in kelp or \
+                    idx in used or partner in used:
                 continue
-            picked.append(idx)
-            if len(picked) == 2:
-                break
-        if len(picked) < 2:
+            used.update((idx, partner))
+            portals += [(idx, pid), (partner, pid)]
             break
-        used.update(picked)
-        portals += [(picked[0], pid), (picked[1], pid)]
+        else:
+            break
 
     return MapSpec(w, h, dragons, sorted(kelp), portals,
-                   pearl_gap=rng.choice(pearl_gap_choices), name=f"R{w}x{h}")
+                   pearl_gap=rng.choice(pearl_gap_choices), name=f"R{w}x{h}",
+                   symmetry="xy")
