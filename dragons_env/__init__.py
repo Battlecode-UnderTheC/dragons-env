@@ -9,8 +9,8 @@ anything else an agent needs belong with the agent, not here.
 """
 
 from .engine import MatchResult, WasmEngine
-from .protocol import SpawnInfo, TurnBlock, parse_spawn, parse_turn
+from .protocol import SonarEchoes, SpawnInfo, TurnBlock, parse_spawn, parse_turn
 from . import mapgen
 
-__all__ = ["WasmEngine", "MatchResult", "TurnBlock", "SpawnInfo", "parse_turn",
+__all__ = ["WasmEngine", "MatchResult", "TurnBlock", "SpawnInfo", "SonarEchoes", "parse_turn",
            "parse_spawn", "mapgen"]

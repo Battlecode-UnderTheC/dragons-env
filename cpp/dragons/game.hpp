@@ -59,7 +59,15 @@ struct Dragon {
   bool alive = true;
   Dir facing = Dir::N;
   std::deque<Point> segments;     // head at the front
-  std::vector<uint32_t> inbox;    // sonar delivered since this dragon's last turn
+  std::vector<uint64_t> inbox;    // sonar delivered since this dragon's last turn
+
+  struct SonarEchoes {
+    int32_t kelp = 0;
+    int32_t ally = 0;
+    int32_t ally_head = 0;
+    int32_t enemy = 0;
+    int32_t enemy_head = 0;
+  } echoes;
 
   int length() const { return static_cast<int>(segments.size()); }
   const Point& head() const { return segments.front(); }
@@ -70,8 +78,11 @@ struct Action {
   Kind kind = Kind::None;
   std::vector<Dir> dirs;        // for Move; length 1 is a plain step
   int split_size = 0;           // for Split
+  // The legacy sonar form follows the dragon's facing after its action.
   bool sonar = false;
   uint32_t payload = 0;
+  // Protocol 3 allows one independent 64-bit message in each N/E/S/W ray.
+  std::array<std::optional<uint64_t>, 4> sonars{};
 };
 
 struct DeathEvent {
@@ -145,7 +156,7 @@ class Game {
   bool Step(Dragon& dragon, Dir dir, bool pay);
   void Move(Dragon& dragon, const std::vector<Dir>& dirs);
   void Split(Dragon& dragon, int size);
-  void CastSonar(Dragon& dragon, uint32_t message);
+  void CastSonar(Dragon& dragon, Dir direction, uint64_t message);
   void PearlTick();
 
  private:

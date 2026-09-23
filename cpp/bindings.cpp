@@ -8,6 +8,17 @@ using namespace dragons;
 
 namespace {
 
+void SetSonars(Action& action, const py::dict& sonars) {
+  for (const auto& item : sonars) {
+    const std::string direction = py::cast<std::string>(item.first);
+    if (direction.size() != 1) throw std::invalid_argument("bad sonar direction");
+    const char* found = std::strchr("NESW", direction[0]);
+    if (!found) throw std::invalid_argument("bad sonar direction");
+    action.sonars[static_cast<size_t>(found - "NESW")] =
+        py::cast<uint64_t>(item.second);
+  }
+}
+
 py::dict DragonToDict(const Dragon& dragon) {
   py::list segments;
   for (const Point& p : dragon.segments) segments.append(py::make_tuple(p.x, p.y));
@@ -19,6 +30,13 @@ py::dict DragonToDict(const Dragon& dragon) {
   out["segments"] = segments;
   out["length"] = dragon.length();
   out["inbox"] = dragon.inbox;
+  py::dict echoes;
+  echoes["kelp"] = dragon.echoes.kelp;
+  echoes["ally"] = dragon.echoes.ally;
+  echoes["ally_head"] = dragon.echoes.ally_head;
+  echoes["enemy"] = dragon.echoes.enemy;
+  echoes["enemy_head"] = dragon.echoes.enemy_head;
+  out["echoes"] = echoes;
   return out;
 }
 
@@ -29,7 +47,8 @@ PYBIND11_MODULE(_dragons, m) {
 
   py::class_<Action>(m, "Action")
       .def(py::init<>())
-      .def_static("move", [](const std::string& dirs, bool sonar, uint32_t payload) {
+      .def_static("move", [](const std::string& dirs, bool sonar, uint32_t payload,
+                             const py::dict& sonars) {
         Action action;
         action.kind = Action::Kind::Move;
         for (char c : dirs) {
@@ -39,16 +58,21 @@ PYBIND11_MODULE(_dragons, m) {
         }
         action.sonar = sonar;
         action.payload = payload;
+        SetSonars(action, sonars);
         return action;
-      }, py::arg("dirs"), py::arg("sonar") = false, py::arg("payload") = 0)
-      .def_static("split", [](int size, bool sonar, uint32_t payload) {
+      }, py::arg("dirs"), py::arg("sonar") = false, py::arg("payload") = 0,
+         py::arg("sonars") = py::dict())
+      .def_static("split", [](int size, bool sonar, uint32_t payload,
+                              const py::dict& sonars) {
         Action action;
         action.kind = Action::Kind::Split;
         action.split_size = size;
         action.sonar = sonar;
         action.payload = payload;
+        SetSonars(action, sonars);
         return action;
-      }, py::arg("size"), py::arg("sonar") = false, py::arg("payload") = 0)
+      }, py::arg("size"), py::arg("sonar") = false, py::arg("payload") = 0,
+         py::arg("sonars") = py::dict())
       .def_static("none", [] { return Action{}; });
 
   py::class_<Game>(m, "Game")

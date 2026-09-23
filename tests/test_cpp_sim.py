@@ -7,7 +7,8 @@ window with the official engine's observation.
 The native simulator uses the official engine's mt19937 seed and modulo-based
 range reduction, so both fixed and variable pearl gaps are compared. Everything
 is checked round by round: movement, sprints and their incremental cost,
-collisions, splits, sonar, corpse pearls, eating, spawning and scoring.
+collisions, splits, directed 64-bit sonar and echoes, corpse pearls, eating,
+spawning and scoring.
 """
 from __future__ import annotations
 
@@ -40,15 +41,26 @@ def scripted_action(seed, round_num, dragon_id, facing, length):
     """Depends only on (round, dragon id) and the dragon's own facing, so both
     engines can be driven through the identical sequence."""
     rng = random.Random(f"{seed}:{round_num}:{dragon_id}")
+    sonars = {}
+    for direction in "NESW":
+        if rng.random() < 0.18:
+            payload = rng.randrange(2 ** 64)
+            # A dragon only opts into protocol 3 at the end of its first turn.
+            # Keep round-zero values compatible with recipients still on v2.
+            sonars[direction] = payload if round_num else payload & 0xFFFFFFFF
     if length >= 5 and rng.random() < 0.10:
-        return ("split", rng.randint(2, length - 2), False, 0)
+        return ("split", rng.randint(2, length - 2), sonars)
     steps = 1 if rng.random() < 0.65 else rng.randint(2, 3)
     dirs, at = [], facing
     for _ in range(steps):
         at = REL_TO_ABS[at][rng.choice("FLR")]
         dirs.append(at)
-    sonar = rng.random() < 0.25
-    return ("move", "".join(dirs), sonar, rng.randrange(2 ** 32) if sonar else 0)
+    return ("move", "".join(dirs), sonars)
+
+
+def echoes_tuple(echoes):
+    return (echoes.kelp, echoes.ally, echoes.ally_head,
+            echoes.enemy, echoes.enemy_head)
 
 
 def random_board(rng, pearl_gap=(0, 0)) -> MapSpec:
@@ -85,12 +97,14 @@ def engine_states(spec: MapSpec, seed: int):
                         for i in range(49) if block.pearl[i])
         parts = sorted((p.dragon_id, p.x, p.y, p.is_head) for p in block.parts)
         seen.append((block.round, dragon_id, block.length, block.facing,
-                     tuple(block.messages), tuple(pearls), tuple(parts)))
-        kind, arg, sonar, payload = scripted_action(
+                     tuple(block.messages), echoes_tuple(block.echoes),
+                     tuple(pearls), tuple(parts)))
+        kind, arg, sonars = scripted_action(
             seed, block.round, dragon_id, block.facing, block.length)
         lines = [f"MOVE {arg}"] if kind == "move" else [f"SPLIT {arg}"]
-        if sonar:
-            lines.append(f"SONAR {payload}")
+        lines += [f"SONAR {direction} {payload}"
+                  for direction, payload in sonars.items()]
+        lines.append("PROTOCOL 3")
         return ("\n".join(lines) + "\n").encode()
 
     result = engine.run(spec.to_bytes(), reply, None,
@@ -124,13 +138,16 @@ def native_states(spec: MapSpec, seed: int):
                 for i, (x, y) in enumerate(other["segments"]):
                     if (x, y) in visible:
                         parts.append((other["id"], x, y, i == 0))
+            echoes = dragon["echoes"]
             seen.append((game.round, dragon["id"], dragon["length"],
                          dragon["facing"], tuple(dragon["inbox"]),
+                         tuple(echoes[name] for name in
+                               ("kelp", "ally", "ally_head", "enemy", "enemy_head")),
                          pearls, tuple(sorted(parts))))
-            kind, arg, sonar, payload = scripted_action(
+            kind, arg, sonars = scripted_action(
                 seed, game.round, dragon["id"], dragon["facing"], dragon["length"])
-            action = (_dragons.Action.move(arg, sonar, payload) if kind == "move"
-                      else _dragons.Action.split(arg, sonar, payload))
+            action = (_dragons.Action.move(arg, sonars=sonars) if kind == "move"
+                      else _dragons.Action.split(arg, sonars=sonars))
             game.take_turn(index, action)
             index += 1
         game.end_round()
@@ -150,10 +167,10 @@ def test_native_sim_matches_the_engine(seed, gap):
     for i, (a, b) in enumerate(zip(engine_seen, native_seen)):
         assert a == b, (
             f"diverged at turn {i} (round {a[0]}, dragon {a[1]}):\n"
-            f"  engine: len={a[2]} facing={a[3]} msgs={a[4]}\n"
-            f"          pearls={a[5]}\n          parts={a[6]}\n"
-            f"  native: len={b[2]} facing={b[3]} msgs={b[4]}\n"
-            f"          pearls={b[5]}\n          parts={b[6]}")
+            f"  engine: len={a[2]} facing={a[3]} msgs={a[4]} echoes={a[5]}\n"
+            f"          pearls={a[6]}\n          parts={a[7]}\n"
+            f"  native: len={b[2]} facing={b[3]} msgs={b[4]} echoes={b[5]}\n"
+            f"          pearls={b[6]}\n          parts={b[7]}")
     assert len(engine_seen) == len(native_seen), (
         f"turn counts differ: engine {len(engine_seen)} vs native {len(native_seen)}")
     assert [(d, r) for d, r, _ in engine_deaths] == [(d, r) for d, r, _ in native_deaths]

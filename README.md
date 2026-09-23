@@ -19,7 +19,10 @@ while not game.finished() and game.round < 500:
     index = game.next_turn()
     while index is not None:                     # includes children born this round
         dragon = game.dragons()[index]
-        game.take_turn(index, _dragons.Action.move(dragon["facing"]))
+        game.take_turn(index, _dragons.Action.move(
+            dragon["facing"],
+            sonars={"N": 2**63, "E": 1806},          # optional protocol-3 rays
+        ))
         index = game.next_turn(index)
     game.end_round()
 print(game.result(), game.team_score(0), game.team_score(1))
@@ -50,6 +53,25 @@ A few worth knowing:
   left, and a split child takes its turn in the round it is born;
 * pearls tick at the **start** of a round, so one planted this round is edible
   this round, and never spawn under a living dragon.
+* sonar supports **four directed unsigned 64-bit messages** per turn and casts
+  them in N/E/S/W order; `dragon["echoes"]` reports what the prior rays hit;
+* a sonar fired from a head into its own body is internally refracted and exits
+  through the tail in its outward direction.
+
+The action factories retain the old positional `sonar=True, payload=...`
+arguments for compatibility. New code should pass a direction-to-message map:
+
+```python
+action = _dragons.Action.move("N", sonars={
+    "N": 1,
+    "W": 2**64 - 1,
+})
+game.take_turn(index, action)
+
+dragon = game.dragons()[index]
+print(dragon["inbox"])    # received uint64 values, in send order
+print(dragon["echoes"])   # kelp, ally, ally_head, enemy, enemy_head
+```
 
 ## What is verified, and what is not
 
@@ -59,11 +81,11 @@ segment, lengths, facings, sonar inboxes, death causes, and winner -- before
 every turn. Boards use the documented minimum size of 10x10.
 
 **Verified in CI**: 32 differential matches across four pearl regimes, plus
-targeted regressions for split-and-sonar, same-tile horizontal and vertical
-portals, symmetric pearl countdowns, split-child turn order, and map bounds.
-Movement, sprints and their per-step cost, splits, sonar, collisions, all five
-death causes, corpse pearls, pearl spawning, scoring and the 500-round horizon
-are covered.
+targeted regressions for split-and-sonar, directed 64-bit sonar, total internal
+refraction, echoes, same-tile horizontal and vertical portals, symmetric pearl
+countdowns, split-child turn order, and map bounds. Movement, sprints and their
+per-step cost, splits, sonar, collisions, all five death causes, corpse pearls,
+pearl spawning, scoring and the 500-round horizon are covered.
 
 This caught five real bugs during development: the result being decided per
 round rather than per turn, split children acting in the round they are born,
@@ -94,4 +116,12 @@ tests/          differential tests against the real engine
 uv venv .venv && uv pip install --python .venv/bin/python numpy unswbc pybind11 pytest
 PYTHON=.venv/bin/python ./tools/build_native.sh
 PYTHONPATH=.:cpp .venv/bin/python -m pytest tests -q
+```
+
+On Windows with Visual Studio 2022 Community and Python 3.12:
+
+```powershell
+.\tools\build_native_windows.cmd
+$env:PYTHONPATH="$PWD;$PWD\cpp"
+.\.venv\Scripts\python.exe -m pytest tests -q
 ```

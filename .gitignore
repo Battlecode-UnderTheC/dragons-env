@@ -4,5 +4,6 @@ __pycache__/
 *.pyd
 *.lib
 *.exp
+*.obj
 .venv/
 build/

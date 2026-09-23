@@ -3,7 +3,7 @@ name = "dragons-env"
 version = "0.1.0"
 description = "Fast, engine-verified simulator for the UNSW Battlecode dragons game"
 requires-python = ">=3.12"
-dependencies = ["numpy>=2", "unswbc>=0.3.6", "pybind11>=2.12"]
+dependencies = ["numpy>=2", "unswbc>=1.0.0", "pybind11>=2.12"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

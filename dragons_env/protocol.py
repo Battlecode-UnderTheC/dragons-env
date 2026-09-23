@@ -7,7 +7,8 @@ A turn block looks like:
     LENGTH 6
     UNIT_COUNT 2
     NUM_MSGS 1
-    <one message per line, uint32>
+    <one message per line, uint64>
+    ECHOES <kelp> <ally body> <ally head> <enemy body> <enemy head>
     <49 lines "x y hasPearl pearlIn", row major from the window's top left>
     DRAGON_BODIES 7
     <one line per part: "team dragonId x y facing isHead">
@@ -66,6 +67,16 @@ class SpawnInfo:
     unit_limit: int
 
 
+@dataclass(frozen=True)
+class SonarEchoes:
+    """Counts of what this dragon's sonars hit on its previous turn."""
+    kelp: int = 0
+    ally: int = 0
+    ally_head: int = 0
+    enemy: int = 0
+    enemy_head: int = 0
+
+
 @dataclass
 class Part:
     __slots__ = ("team", "dragon_id", "x", "y", "facing", "is_head")
@@ -85,6 +96,7 @@ class TurnBlock:
     length: int
     unit_count: int
     messages: list[int]
+    echoes: SonarEchoes
     pearl: np.ndarray             # [49] int8, 1 where a pearl sits
     pearl_time: np.ndarray        # [49] int32, -1 where the tile never spawns
     parts: list[Part]
@@ -199,6 +211,14 @@ def parse_turn(block: str, width: int = 0, height: int = 0) -> TurnBlock:
     messages = [int(lines[at + i]) for i in range(n_msgs)]
     at += n_msgs
 
+    echoes = SonarEchoes()
+    if lines[at].startswith("ECHOES"):
+        values = list(map(int, lines[at].split()[1:]))
+        if len(values) != 5:
+            raise ValueError("ECHOES requires five counts")
+        echoes = SonarEchoes(*values)
+        at += 1
+
     tile_tokens = " ".join(lines[at:at + TILES]).split()
     at += TILES
     # only the pearl columns need converting; x and y follow from the head once
@@ -220,7 +240,7 @@ def parse_turn(block: str, width: int = 0, height: int = 0) -> TurnBlock:
     h_edges = np.array(" ".join(lines[at:at + VISION + 1]).split())
     at += VISION + 1
     v_edges = np.array(" ".join(lines[at:at + VISION]).split())
-    out = TurnBlock(rnd, facing, length, units, messages, pearl, pearl_time,
+    out = TurnBlock(rnd, facing, length, units, messages, echoes, pearl, pearl_time,
                     parts, h_edges, v_edges, head_x, head_y, width, height)
     if not width:
         # board size unknown: fall back to the coordinates the engine printed,

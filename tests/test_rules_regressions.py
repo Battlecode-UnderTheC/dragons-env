@@ -37,6 +37,51 @@ def test_split_then_sonar_uses_live_parent_reference():
     assert dragons[2]["inbox"] == [12345]
 
 
+def test_tail_refraction_directed_uint64_and_echo_match_official_engine():
+    """A westward ray enters A's body, leaves its tail, and hits B's head."""
+    payload = 2 ** 64 - 1
+    spec = MapSpec(
+        10, 10,
+        [(0, [(5, 5), (4, 5), (3, 5), (2, 5)]),
+         (1, [(0, 5), (9, 5), (8, 5)])],
+        pearl_gap=(0, 0),
+    )
+    official = {}
+
+    def reply(dragon_id, raw):
+        block = parse_turn(raw.decode(), 10, 10)
+        if block.round == 1 and dragon_id == 1:
+            official["messages"] = block.messages
+        if block.round == 2 and dragon_id == 0:
+            official["echoes"] = block.echoes
+            return b""
+        lines = ["MOVE E", "PROTOCOL 3"]
+        if block.round == 1 and dragon_id == 0:
+            lines.insert(1, f"SONAR W {payload}")
+        return ("\n".join(lines) + "\n").encode()
+
+    WasmEngine().run(spec.to_bytes(), reply)
+
+    game = _dragons.Game.from_map_text(spec.to_text())
+    game.begin_round()
+    game.take_turn(0, _dragons.Action.move("E"))
+    game.take_turn(1, _dragons.Action.move("E"))
+    game.end_round()
+    game.begin_round()
+    game.take_turn(0, _dragons.Action.move("E", sonars={"W": payload}))
+    assert game.dragons()[1]["inbox"] == official["messages"] == [payload]
+    game.take_turn(1, _dragons.Action.move("E"))
+    game.end_round()
+
+    echo = game.dragons()[0]["echoes"]
+    assert (echo["kelp"], echo["ally"], echo["ally_head"],
+            echo["enemy"], echo["enemy_head"]) == (
+        official["echoes"].kelp, official["echoes"].ally,
+        official["echoes"].ally_head, official["echoes"].enemy,
+        official["echoes"].enemy_head,
+    ) == (0, 0, 0, 0, 1)
+
+
 def test_next_turn_includes_child_born_during_round():
     game = _dragons.Game.from_map_text(
         MapSpec(10, 10, two_dragons(4), pearl_gap=(0, 0)).to_text())

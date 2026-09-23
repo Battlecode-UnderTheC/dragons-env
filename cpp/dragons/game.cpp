@@ -213,17 +213,44 @@ void Game::Split(Dragon& dragon, int size) {
   // Splitting replaces the move, so the parent does not step this turn.
 }
 
-// CastSonar: a straight ray along the dragon's facing, stopped by kelp, carried
-// through portals, delivered to the first living dragon it touches. The range
-// limit is width + height steps, which always covers at least one full wrap.
-void Game::CastSonar(Dragon& dragon, uint32_t message) {
+// CastSonar: a directed ray stopped by kelp, carried through portals, and
+// delivered to the first living dragon it touches. A ray fired from the head
+// directly into the sender's own body is internally refracted: it leaves from
+// the tail in the outward direction. A ray which later reaches any dragon,
+// including the sender, stops normally. The sender receives an echo category
+// on its next turn whether the obstruction was visible or not.
+void Game::CastSonar(Dragon& dragon, Dir direction, uint64_t message) {
   Point at = dragon.head();
+  const int32_t sender_index = IndexOfDragon(dragon);
+
+  // Total internal refraction applies only when the ray enters the body at its
+  // point of origin. Body facings point toward the head, so the outward tail
+  // direction is the opposite of the facing stored for the tail tile.
+  const std::optional<Point> first = TileAfterStep(at, direction);
+  if (!first) {
+    ++dragon.echoes.kelp;
+    return;
+  }
+  if (occupant_[Index(*first)] == sender_index && *first != dragon.head()) {
+    at = dragon.segments.back();
+    direction = static_cast<Dir>((static_cast<int>(TileFacing(at)) + 2) % 4);
+  }
+
   const int limit = width_ + height_;
   for (int i = 0; i < limit; ++i) {
-    const std::optional<Point> next = TileAfterStep(at, dragon.facing);
-    if (!next) return;
+    const std::optional<Point> next = TileAfterStep(at, direction);
+    if (!next) {
+      ++dragon.echoes.kelp;
+      return;
+    }
     at = *next;
     if (Dragon* hit = AliveDragonOccupying(at)) {
+      const bool ally = hit->team == dragon.team;
+      const bool head = hit->head() == at;
+      if (ally && head) ++dragon.echoes.ally_head;
+      else if (ally) ++dragon.echoes.ally;
+      else if (head) ++dragon.echoes.enemy_head;
+      else ++dragon.echoes.enemy;
       hit->inbox.push_back(message);
       return;
     }
@@ -308,6 +335,7 @@ void Game::TakeTurn(int dragon_index, const Action& action) {
   Dragon& dragon = dragons_[dragon_index];
   if (!dragon.alive) return;
   dragon.inbox.clear();
+  dragon.echoes = {};
   switch (action.kind) {
     case Action::Kind::Move: Move(dragon, action.dirs); break;
     case Action::Kind::Split: Split(dragon, action.split_size); break;
@@ -317,7 +345,16 @@ void Game::TakeTurn(int dragon_index, const Action& action) {
   // dragon ended up, and only if it survived. Split may have grown dragons_,
   // invalidating `dragon`, so take the reference afresh.
   Dragon& after = dragons_[dragon_index];
-  if (action.sonar && after.alive) CastSonar(after, action.payload);
+  if (!after.alive) return;
+  std::array<std::optional<uint64_t>, 4> sonars = action.sonars;
+  if (action.sonar) {
+    const size_t facing = static_cast<size_t>(after.facing);
+    if (!sonars[facing]) sonars[facing] = action.payload;
+  }
+  // The engine always casts in cardinal order, independent of command order.
+  for (size_t d = 0; d < sonars.size(); ++d) {
+    if (sonars[d]) CastSonar(after, static_cast<Dir>(d), *sonars[d]);
+  }
 }
 
 void Game::BeginRound() { PearlTick(); }
