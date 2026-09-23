@@ -110,6 +110,11 @@ void Game::Kill(Dragon& dragon, Death reason) {
   }
   for (const Point& segment : dragon.segments) Vacate(segment);
   dragon.alive = false;
+  // dead dragons stay in the list (indices are stable) but nothing reads
+  // their body again: release it, or a long match with many splits keeps
+  // every corpse until the match ends
+  std::deque<Point>().swap(dragon.segments);
+  std::vector<uint32_t>().swap(dragon.inbox);
   deaths_.push_back(DeathEvent{dragon.id, round_, reason});
 }
 
